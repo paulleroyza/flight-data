@@ -166,4 +166,101 @@ python3 dataflow-flights_session_window.py \
   --staging_location gs://$BUCKET/flight-data/staging
 ```
 
+```sql
+--query 1
+WITH
+  flights AS (
+  SELECT
+    DATETIME(DMG,
+      TMG) AS DateTimeG,
+    LOWER(Hex) AS icao24,
+    SessionID,
+    ST_GEOGPOINT(Lng,
+      Lat) AS point,Alt
+  FROM
+    FlightData.transponder
+  WHERE
+    DMG = "2020-12-02"
+    AND Lat IS NOT NULL
+    AND Lng IS NOT NULL
+    ),
+  planes AS (
+  SELECT
+    icao24,
+    manufacturername,
+    model,
+    operator
+  FROM
+    FlightData.AircraftDatabase)
+SELECT
+  icao24,
+  SessionID,
+  OPERATOR,
+  min(Alt) as lowest,
+  manufacturername,
+  `model`,
+  st_makeline(ARRAY_AGG(point
+    ORDER BY
+      DateTimeG)) AS flightpath,
+  ARRAY_LENGTH(ARRAY_AGG(point
+    ORDER BY
+      DateTimeG)) AS path_length
+FROM
+  flights
+JOIN
+  planes
+USING
+  (icao24)
+WHERE
+  LENGTH(operator)>0
+GROUP BY
+  SessionID,
+  icao24,
+  operator,
+  manufacturername,
+  `model`
+ORDER BY
+  path_length DESC
+LIMIT
+  100
+
+
+
+--query 2
+
+WITH
+  pointcloud AS (
+  SELECT
+    datetime(DMG,
+      TMG) AS timestamp,
+    SessionID,
+    Alt,
+    ST_GEOGPOINT(Lng,
+      Lat) AS Pt
+  FROM
+    `project_id.FlightData.transponder`
+  WHERE
+    DMG = "2020-12-09"
+    AND Lat IS NOT NULL
+    AND Lng IS NOT NULL and Alt<6500),
+  linesegment AS (
+  SELECT
+    Alt,
+    Pt AS Pt1,
+    LAG(Pt, 1) OVER (PARTITION BY SessionID ORDER BY timestamp) AS Pt2
+  FROM
+    pointcloud )
+SELECT
+  Alt,
+  st_makeline(Pt1,
+    Pt2) as line
+FROM
+  linesegment
+WHERE
+  Pt1 IS NOT NULL
+  AND Pt2 IS NOT NULL
+
+
+```
+
   
