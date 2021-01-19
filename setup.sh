@@ -1,31 +1,25 @@
-# Flight Data Challenge Lab
+#!/bin/bash
 
-Set up some environment variables
+set -eo pipefail
 
-```bash
 export PROJECT_ID=$DEVSHELL_PROJECT_ID
 export BUCKET=$PROJECT_ID
 export SUBSCRIPTION=flight-data
 export REGION=EU
+export COMPUTEREGION=europe-west1
 export ZONE=europe-west1-d
-```
 
-We need a bucket for the pipeline, create a bucket with your project name, should be unique, if not adjust accordingly.
-
-```bash
+#prepare bucket
 gsutil --l $REGION mb $BUCKET
-```
 
+gsutil -m cp gs://paul-leroy/flight-data/FlightData-*.avro gs://$BUCKET/import/
+gsutil cp gs://paul-leroy/flight-data/doc8643AircraftTypes.csv gs://$BUCKET/import/
+gsutil cp gs://paul-leroy/flight-data/doc8643Manufacturers.csv gs://$BUCKET/import/
+gsutil cp gs://paul-leroy/flight-data/aircraftDatabase.csv gs://$BUCKET/import/
 
-Prepare to run Dataflow
-
-```bash
+#Make sure beam[gcp] is loaded
 python3 -m pip install -U apache-beam[gcp]
-```
 
-Create a file for the Bigquery schema. This step isn't really required unless you really want partitioned tables, so you can skip to the next optional step of getting the ancilliary data.
-
-```bash
 #Preparing schema file
 mkdir -p temp/
 cat > temp/flightdata-schema.json <<EOF
@@ -55,11 +49,7 @@ cat > temp/flightdata-schema.json <<EOF
         {"name": "Gnd", "type": "INT64", "mode": "NULLABLE", "description": "Flag to indicate ground squat switch is active"}
 ]
 EOF
-```
 
-We create the Bigquery dataset and create the partitioned/clustered dataset . . . do you have any idea how much data planes create?
-
-```bash
 # prepare BigQuery
 bq --location $REGION mk $PROJECT_ID:FlightData
 
@@ -72,11 +62,7 @@ bq mk --table \
 --description "Transponder flight data" \
 --label purpose:demo \
 $PROJECT_ID:FlightData.transponder
-```
 
-You can find the IACO source data and load some ancilliary tables
-
-```bash
 #Secondary tables
 #AircraftDatabase
 cat > temp/AircraftDatabase-schema.json <<EOF
@@ -136,19 +122,46 @@ bq mk --table \
 --description "Aircraft Types" \
 --label purpose:demo \
 $PROJECT_ID:FlightData.Types
-```
 
-Now, you need a pubsub topic
+#check these
+bq load --source_format CSV --skip_leading_rows 1 $PROJECT_ID:FlightData.Types gs://$BUCKET/import/doc8643AircraftTypes.csv temp/AircraftTypes-schema.json
+bq load --source_format CSV --skip_leading_rows 1 --allow_jagged_rows --allow_quoted_newlines $PROJECT_ID:FlightData.AircraftDatabase gs://$BUCKET/import/aircraftDatabase.csv temp/AircraftDatabase-schema.json
+bq load --source_format AVRO $PROJECT_ID:FlightData.historic gs://$BUCKET/import/FlightData-*.avro temp/AircraftDatabase-schema.json
 
-```bash
+# ETL historic AVRO
+bq query --append_table --destination_table $PROJECT_ID:FlightData.transponder \
+"#standardsql
+SELECT 
+cast(SessionID as STRING) as SessionID,
+        cast(MT as STRING) as MT,
+        cast(TT as INT64) as TT,
+        cast(SID as STRING) as SID,
+        cast(AID as STRING) as AID,
+        cast(Hex as STRING) as Hex,
+        cast(FID as STRING) as FID,
+        cast(DMG as DATE) as DMG,
+        cast(TMG as TIME) as TMG,
+        cast(DML as DATE) as DML,
+        cast(TML as TIME) as TML,
+        cast(CS as STRING) as CS,
+        cast(Alt as INT64) as Alt,
+        cast(GS as INT64) as GS,
+        cast(Trk as INT64) as Trk,
+        cast(Lat as FLOAT64) as Lat,
+        cast(Lng as FLOAT64) as Lng,
+        cast(VR as INT64) as VR,
+        cast(Sq as INT64) as Sq,
+        cast(Alrt as INT64) as Alrt,
+        cast(Emer as INT64) as Emer,
+        cast(SPI as INT64) as SPI,
+        cast(Gnd as INT64) as Gnd
+FROM FlightData.historic"
+
+#prepare pubsub
 gcloud --project $PROJECT_ID pubsub subscriptions create $SUBSCRIPTION \
   --topic projects/paul-leroy/topics/flight-transponder \
   --ack-deadline 300
-```
 
-And now run the pipeline against your subscription
-
-```bash
 #subs based
 python3 dataflow-flights_session_window.py \
   --input_subscription projects/$PROJECT_ID/subscriptions/$SUBSCRIPTION \
@@ -161,106 +174,9 @@ python3 dataflow-flights_session_window.py \
   --num_workers 1 \
   --disk_size_gb 100 \
   --machine_type n1-standard-1 \
-  --worker_zone $ZONE \
+  --region $COMPUTEREGION \
   --temp_location gs://$BUCKET/flight-data/temp \
   --staging_location gs://$BUCKET/flight-data/staging
-```
 
-```sql
---query 1
-WITH
-  flights AS (
-  SELECT
-    DATETIME(DMG,
-      TMG) AS DateTimeG,
-    LOWER(Hex) AS icao24,
-    SessionID,
-    ST_GEOGPOINT(Lng,
-      Lat) AS point,Alt
-  FROM
-    FlightData.transponder
-  WHERE
-    DMG = "2020-12-02"
-    AND Lat IS NOT NULL
-    AND Lng IS NOT NULL
-    ),
-  planes AS (
-  SELECT
-    icao24,
-    manufacturername,
-    model,
-    operator
-  FROM
-    FlightData.AircraftDatabase)
-SELECT
-  icao24,
-  SessionID,
-  OPERATOR,
-  min(Alt) as lowest,
-  manufacturername,
-  `model`,
-  st_makeline(ARRAY_AGG(point
-    ORDER BY
-      DateTimeG)) AS flightpath,
-  ARRAY_LENGTH(ARRAY_AGG(point
-    ORDER BY
-      DateTimeG)) AS path_length
-FROM
-  flights
-JOIN
-  planes
-USING
-  (icao24)
-WHERE
-  LENGTH(operator)>0
-GROUP BY
-  SessionID,
-  icao24,
-  operator,
-  manufacturername,
-  `model`
-ORDER BY
-  path_length DESC
-LIMIT
-  100
-
-
-
---query 2
-
-WITH
-  pointcloud AS (
-  SELECT
-    datetime(DMG,
-      TMG) AS timestamp,
-    SessionID,
-    Alt,
-    ST_GEOGPOINT(Lng,
-      Lat) AS Pt
-  FROM
-    `project_id.FlightData.transponder`
-  WHERE
-    DMG = "2020-12-09"
-    AND Lat IS NOT NULL
-    AND Lng IS NOT NULL and Alt<6500),
-  linesegment AS (
-  SELECT
-    Alt,
-    Pt AS Pt1,
-    LAG(Pt, 1) OVER (PARTITION BY SessionID ORDER BY timestamp) AS Pt2
-  FROM
-    pointcloud )
-SELECT
-  Alt,
-  st_makeline(Pt1,
-    Pt2) as line
-FROM
-  linesegment
-WHERE
-  Pt1 IS NOT NULL
-  AND Pt2 IS NOT NULL
-
-
-```
 
   

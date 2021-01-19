@@ -47,6 +47,9 @@ def parse_pubsub(line):
       del data[k]
   return (data['Hex'],data)
 
+def convert_to_string(line):
+  return line.decode("utf-8") 
+
 def extract_time(data):
   import apache_beam as beam
   from datetime import datetime
@@ -78,7 +81,8 @@ def run(argv=None):
 
   with beam.Pipeline(argv=pipeline_args) as p:
     # Read the pubsub topic into a PCollection.
-    lines = ( p | 'Read from {}'.format(known_args.input_subscription) >> beam.io.ReadStringsFromPubSub(subscription=known_args.input_subscription)
+    lines = ( p | 'Read from {}'.format(known_args.input_subscription) >> beam.io.ReadFromPubSub(subscription=known_args.input_subscription)
+                | 'Convert to String' >> beam.Map(convert_to_string)
                 | 'Filter Just in Case' >> beam.Regex.matches(regex)
                 | 'Convert from CSV -> elements, blanks -> Null' >> beam.Map(parse_pubsub)
                 | 'Generated Timestamp' >> beam.Map(extract_time)
@@ -86,9 +90,12 @@ def run(argv=None):
                 | 'Keep flight until it disappears' >> beam.GroupByKey()
                 | 'Add session id' >> beam.FlatMap(add_session)
             )
-#    output_to_console =( lines | 'Output' >> beam.Map(print) )
+    #if ("--runner=Dataflow" in pipeline_args):
     output_to_bq = ( lines | 'Writing out to {}'.format(known_args.output_table) >> beam.io.WriteToBigQuery(known_args.output_table,schema=schema,create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND))
-#python3 dataflow-flights_session_window.py --input_subscription projects/$DEVSHELL_PROJECT_ID/subscriptions/flight-test --streaming
+    #else:
+    #  output_to_console =( lines | 'Output' >> beam.Map(print) )
+
+#python3 dataflow-flights_session_window.py --input_subscription projects/$DEVSHELL_PROJECT_ID/subscriptions/test --streaming --output_table NONE --runner=DirectRunner
 if __name__ == '__main__':
   logging.getLogger().setLevel(logging.INFO)
   run()
