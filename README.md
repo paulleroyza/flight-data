@@ -7,6 +7,7 @@ export PROJECT_ID=$DEVSHELL_PROJECT_ID
 export BUCKET=$PROJECT_ID
 export SUBSCRIPTION=flight-data
 export REGION=EU
+export COMPUTEREGION=europe-west1
 export ZONE=europe-west1-d
 ```
 
@@ -161,7 +162,7 @@ python3 dataflow-flights_session_window.py \
   --num_workers 1 \
   --disk_size_gb 100 \
   --machine_type n1-standard-1 \
-  --worker_zone $ZONE \
+  --region $COMPUTEREGION \
   --temp_location gs://$BUCKET/flight-data/temp \
   --staging_location gs://$BUCKET/flight-data/staging
 ```
