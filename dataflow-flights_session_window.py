@@ -62,6 +62,10 @@ def add_session(session_elems):
     session['SessionID']=session_id
   return session_elems[1]
 
+def fake_session(session_elems):
+  session_elems[1]['SessionID']=""
+  return session_elems[1]
+
 def run(argv=None):
   """Build and run the pipeline."""
 
@@ -86,14 +90,16 @@ def run(argv=None):
                 | 'Filter Just in Case' >> beam.Regex.matches(regex)
                 | 'Convert from CSV -> elements, blanks -> Null' >> beam.Map(parse_pubsub)
                 | 'Generated Timestamp' >> beam.Map(extract_time)
-                | 'Session Window by Flight' >> beam.WindowInto(window.Sessions(2 * 60))
-                | 'Keep flight until it disappears' >> beam.GroupByKey()
-                | 'Add session id' >> beam.FlatMap(add_session)
+                #| 'Session Window by Flight' >> beam.WindowInto(window.Sessions(2 * 60))
+                #| 'Keep flight until it disappears' >> beam.GroupByKey()
+                #| 'Add session id' >> beam.FlatMap(add_session)
+                | 'Add fake session id' >> beam.Map(fake_session)
             )
+
     #if ("--runner=Dataflow" in pipeline_args):
     output_to_bq = ( lines | 'Writing out to {}'.format(known_args.output_table) >> beam.io.WriteToBigQuery(known_args.output_table,schema=schema,create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND))
     #else:
-    #  output_to_console =( lines | 'Output' >> beam.Map(print) )
+    #output_to_console =( lines | 'Output' >> beam.Map(print) )
 
 #python3 dataflow-flights_session_window.py --input_subscription projects/$DEVSHELL_PROJECT_ID/subscriptions/test --streaming --output_table NONE --runner=DirectRunner
 if __name__ == '__main__':
