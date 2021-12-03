@@ -4,6 +4,7 @@ import logging
 import argparse
 import apache_beam as beam
 from apache_beam import window
+from datetime import datetime
 
 schema={
                             'fields': [
@@ -45,6 +46,7 @@ def parse_pubsub(line):
   for k, v in list(data.items()):
     if len(v)==0:
       del data[k]
+  logging.debug('Aircraft : %s', data['Hex'])
   return (data['Hex'],data)
 
 def convert_to_string(line):
@@ -62,9 +64,27 @@ def add_session(session_elems):
     session['SessionID']=session_id
   return session_elems[1]
 
+def add_start_of_window(session_elems):
+  window_start = window.start.to_utc_datetime()
+  session_id=session_elems['Hex']+' '+window_start
+  return session_elems
+
 def fake_session(session_elems):
   session_elems[1]['SessionID']=""
   return session_elems[1]
+
+def flatten_group(elements):
+  (session_id,session_data)=elements
+  for datum in session_data:
+    datum['SessionID']=session_id
+    yield datum
+
+class BuildRecordFn(beam.DoFn):
+
+  def process(self, session_elems,  window=beam.DoFn.WindowParam):
+      window_start = window.start.to_utc_datetime()
+      session_id=session_elems[0]+" "+window_start.strftime("%Y-%m-%d %H:%M:%S.%f")
+      return [(session_id,session_elems[1])]
 
 def run(argv=None):
   """Build and run the pipeline."""
@@ -77,12 +97,12 @@ def run(argv=None):
       '--input_subscription', required=True,
       help='Input PubSub subscription of the form "projects/<PROJECT>/subscriptions/<SUBS>".')
   parser.add_argument(
-      '--output_table', required=True,
+      '--output_table',
       help=
       ('Output BigQuery table for results specified as: PROJECT:DATASET.TABLE '
        'or DATASET.TABLE.'))
   known_args, pipeline_args = parser.parse_known_args(argv)
-
+  logging.info("Started")
   with beam.Pipeline(argv=pipeline_args) as p:
     # Read the pubsub topic into a PCollection.
     lines = ( p | 'Read from {}'.format(known_args.input_subscription) >> beam.io.ReadFromPubSub(subscription=known_args.input_subscription)
@@ -90,18 +110,23 @@ def run(argv=None):
                 | 'Filter Just in Case' >> beam.Regex.matches(regex)
                 | 'Convert from CSV -> elements, blanks -> Null' >> beam.Map(parse_pubsub)
                 | 'Generated Timestamp' >> beam.Map(extract_time)
-                #| 'Session Window by Flight' >> beam.WindowInto(window.Sessions(2 * 60))
-                #| 'Keep flight until it disappears' >> beam.GroupByKey()
-                #| 'Add session id' >> beam.FlatMap(add_session)
-                | 'Add fake session id' >> beam.Map(fake_session)
+                | 'Session Window by Flight' >> beam.WindowInto(window.Sessions(1 * 60)) #2 * 60
+                | 'Group' >> beam.GroupByKey() 
+                | 'Add Session ID to group' >> (beam.ParDo(BuildRecordFn()))
+                | 'Break into rows' >> beam.FlatMap(flatten_group)
             )
 
-    #if ("--runner=Dataflow" in pipeline_args):
-    output_to_bq = ( lines | 'Writing out to {}'.format(known_args.output_table) >> beam.io.WriteToBigQuery(known_args.output_table,schema=schema,create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND))
-    #else:
+#    if ("--runner=Dataflow" in pipeline_args):
+    output_to_bq = ( lines | 'Writing out to {}'.format(known_args.output_table) >> 
+      beam.io.WriteToBigQuery(known_args.output_table,
+        schema=schema,
+        create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
+        write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND))
+#    else:
     #output_to_console =( lines | 'Output' >> beam.Map(print) )
 
-#python3 dataflow-flights_session_window.py --input_subscription projects/$DEVSHELL_PROJECT_ID/subscriptions/test --streaming --output_table NONE --runner=DirectRunner
+#python3 dataflow-flights_session_window.py --input_subscription projects/$DEVSHELL_PROJECT_ID/subscriptions/test --streaming --output_table $DEVSHELL_PROJECT_ID:FlightData.transponder --runner=DirectRunner
+
 if __name__ == '__main__':
   logging.getLogger().setLevel(logging.INFO)
   run()
