@@ -10,9 +10,9 @@ export COMPUTEREGION=europe-west1
 export ZONE=europe-west1-d
 
 #prepare bucket
-gsutil --l $REGION mb $BUCKET
+gsutil mb -l $REGION $BUCKET
 
-gsutil -m cp gs://paul-leroy/flight-data/FlightData-*.avro gs://$BUCKET/import/
+#gsutil -m cp gs://paul-leroy/flight-data/FlightData-*.avro gs://$BUCKET/import/
 gsutil cp gs://paul-leroy/flight-data/doc8643AircraftTypes.csv gs://$BUCKET/import/
 gsutil cp gs://paul-leroy/flight-data/doc8643Manufacturers.csv gs://$BUCKET/import/
 gsutil cp gs://paul-leroy/flight-data/aircraftDatabase.csv gs://$BUCKET/import/
