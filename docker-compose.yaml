@@ -1,0 +1,35 @@
+version: '3'
+services:
+  adsbreceiver:
+    image: paulleroy/stdreceiver:20231118141049
+    entrypoint: ["/app/./dump1090"]
+    privileged: true
+    command: ["--net","--fix","--lat","33","--lon","-117","--net-sbs-port","30003","--net-bo-port","30005","--quiet"]
+    expose: 
+    - "30003"
+    - "30005"
+    networks:
+    - flightdata
+  nodered:
+    environment:
+      GOOGLE_CLOUD_PROJECT: paul-leroy
+    image: paulleroy/nodered:20231118135313
+    volumes:
+    - ./data:/data
+    - /etc/localtime:/etc/localtime
+    ports:
+    - "1880:1880"
+    networks:
+    - flightdata
+  fr24feed:
+    environment:
+      fr24key: <add me>
+    image: paulleroy/fr24feed:20231128205010
+    volumes:
+      - /etc/fr24feed.ini:/etc/fr24feed.ini
+    ports:
+    - "8754:8754"
+    networks:
+    - flightdata
+networks:
+  flightdata:
